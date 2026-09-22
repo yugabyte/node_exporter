@@ -9,6 +9,10 @@
 # The upstream tree is built as-is; only VERSION gets a -fips suffix so promu
 # stamps it into the binary and the tarball names. The Go minor version must
 # match the .promu.yml of the tag, like upstream's own release builds.
+#
+# The upstream tag must already be mirrored into this fork (git push origin
+# refs/tags/<tag>): GITHUB_TOKEN may not push commits that carry workflow files,
+# so the workflow can only tag commits the fork already has.
 set -euo pipefail
 
 FIPS_MODULE=${GOFIPS140:-v1.0.0}
@@ -29,6 +33,14 @@ dist=${build_dir}/dist
 
 echo ">> fetching ${tag} from ${UPSTREAM_URL}"
 git -C "${root}" fetch --no-tags "${UPSTREAM_URL}" "refs/tags/${tag}:refs/tags/${tag}"
+if [[ ${publish} -eq 1 ]]; then
+  origin_sha=$(git -C "${root}" ls-remote origin "refs/tags/${tag}^{}" "refs/tags/${tag}" | awk '{print $1}' | tail -1)
+  commit_sha=$(git -C "${root}" rev-parse "${tag}^{commit}")
+  if [[ "${origin_sha}" != "${commit_sha}" ]]; then
+    echo "!! origin lacks ${tag} at ${commit_sha}; mirror it first: git push origin refs/tags/${tag}" >&2
+    exit 1
+  fi
+fi
 
 rm -rf "${build_dir}"
 mkdir -p "${dist}"
@@ -124,8 +136,14 @@ node_exporter ${version} built against the FIPS 140-3 validated Go Cryptographic
 Archive digests are in \`sha256sums.txt\`.
 NOTES
 
-echo ">> pushing tag ${fips_tag} -> ${commit}"
-git -C "${root}" push origin "${commit}:refs/tags/${fips_tag}"
+existing=$(git -C "${root}" ls-remote origin "refs/tags/${fips_tag}" | awk '{print $1}')
+if [[ -z "${existing}" ]]; then
+  echo ">> pushing tag ${fips_tag} -> ${commit}"
+  git -C "${root}" push origin "${commit}:refs/tags/${fips_tag}"
+elif [[ "${existing}" != "${commit}" ]]; then
+  echo "!! ${fips_tag} already exists on origin at ${existing}, not ${commit}" >&2
+  exit 1
+fi
 echo ">> creating release ${fips_tag}"
 gh release create "${fips_tag}" --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
   --title "node_exporter ${fips_version}" --notes-file "${notes}" --verify-tag \
