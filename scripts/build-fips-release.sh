@@ -10,9 +10,9 @@
 # stamps it into the binary and the tarball names. The Go minor version must
 # match the .promu.yml of the tag, like upstream's own release builds.
 #
-# The upstream tag must already be mirrored into this fork (git push origin
-# refs/tags/<tag>): GITHUB_TOKEN may not push commits that carry workflow files,
-# so the workflow can only tag commits the fork already has.
+# Publishing needs the v<version>-fips tag pushed to the fork beforehand, at
+# the upstream tag's commit, by a person (SSH or a workflow-scoped token):
+# GITHUB_TOKEN is refused when the pushed commit carries workflow files.
 set -euo pipefail
 
 FIPS_MODULE=${GOFIPS140:-v1.0.0}
@@ -33,11 +33,13 @@ dist=${build_dir}/dist
 
 echo ">> fetching ${tag} from ${UPSTREAM_URL}"
 git -C "${root}" fetch --no-tags "${UPSTREAM_URL}" "refs/tags/${tag}:refs/tags/${tag}"
+commit=$(git -C "${root}" rev-parse "${tag}^{commit}")
+fips_tag="v$(tr -d '[:space:]' < <(git -C "${root}" show "${tag}:VERSION"))-fips"
 if [[ ${publish} -eq 1 ]]; then
-  origin_sha=$(git -C "${root}" ls-remote origin "refs/tags/${tag}^{}" "refs/tags/${tag}" | awk '{print $1}' | tail -1)
-  commit_sha=$(git -C "${root}" rev-parse "${tag}^{commit}")
-  if [[ "${origin_sha}" != "${commit_sha}" ]]; then
-    echo "!! origin lacks ${tag} at ${commit_sha}; mirror it first: git push origin refs/tags/${tag}" >&2
+  existing=$(git -C "${root}" ls-remote origin "refs/tags/${fips_tag}" | awk '{print $1}')
+  if [[ "${existing}" != "${commit}" ]]; then
+    echo "!! origin needs ${fips_tag} at ${commit} (found '${existing}'); push it first:" >&2
+    echo "   git push origin ${commit}:refs/tags/${fips_tag}" >&2
     exit 1
   fi
 fi
@@ -48,7 +50,6 @@ git -C "${root}" worktree prune
 git -C "${root}" worktree add --detach "${src}" "${tag}"
 trap 'git -C "${root}" worktree remove --force "${src}"' EXIT
 
-commit=$(git -C "${src}" rev-parse HEAD)
 version=$(tr -d '[:space:]' < "${src}/VERSION")
 fips_version="${version}-fips"
 echo "${fips_version}" > "${src}/VERSION"
@@ -111,7 +112,7 @@ UPSTREAM_TAG=${tag}
 UPSTREAM_COMMIT=${commit}
 VERSION=${version}
 FIPS_VERSION=${fips_version}
-FIPS_TAG=v${fips_version}
+FIPS_TAG=${fips_tag}
 GO_VERSION=${have_go}
 FIPS_MODULE=${fips_module}
 ENV
@@ -123,7 +124,6 @@ if [[ ${publish} -eq 0 ]]; then
   exit 0
 fi
 
-fips_tag="v${fips_version}"
 notes="${build_dir}/notes.md"
 cat > "${notes}" <<NOTES
 node_exporter ${version} built against the FIPS 140-3 validated Go Cryptographic Module.
@@ -136,14 +136,6 @@ node_exporter ${version} built against the FIPS 140-3 validated Go Cryptographic
 Archive digests are in \`sha256sums.txt\`.
 NOTES
 
-existing=$(git -C "${root}" ls-remote origin "refs/tags/${fips_tag}" | awk '{print $1}')
-if [[ -z "${existing}" ]]; then
-  echo ">> pushing tag ${fips_tag} -> ${commit}"
-  git -C "${root}" push origin "${commit}:refs/tags/${fips_tag}"
-elif [[ "${existing}" != "${commit}" ]]; then
-  echo "!! ${fips_tag} already exists on origin at ${existing}, not ${commit}" >&2
-  exit 1
-fi
 echo ">> creating release ${fips_tag}"
 gh release create "${fips_tag}" --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
   --title "node_exporter ${fips_version}" --notes-file "${notes}" --verify-tag \
