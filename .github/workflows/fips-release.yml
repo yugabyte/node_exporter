@@ -1,0 +1,49 @@
+---
+name: FIPS release
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Upstream prometheus/node_exporter tag to build (default v<VERSION> of this branch)
+        required: false
+        default: ""
+      publish:
+        description: Push the <tag>-fips tag and create the GitHub release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build FIPS 140-3 release tarballs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve upstream tag and its Go version
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          tag="${INPUT_TAG:-v$(tr -d '[:space:]' < VERSION)}"
+          git fetch --no-tags https://github.com/prometheus/node_exporter.git "refs/tags/${tag}:refs/tags/${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "go=$(git show "${tag}:.promu.yml" | sed -n 's/^ *version: *//p' | head -1).x" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.meta.outputs.go }}
+      - name: Build and verify
+        if: ${{ !inputs.publish }}
+        run: scripts/build-fips-release.sh "${{ steps.meta.outputs.tag }}"
+      - name: Build, verify and publish
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/build-fips-release.sh --publish "${{ steps.meta.outputs.tag }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node_exporter-fips
+          path: |
+            .fips-build/dist
+            .fips-build/release.env
