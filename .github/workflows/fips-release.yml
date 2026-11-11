@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Resolve upstream tag and its Go version
         id: meta
         env:
@@ -35,12 +37,15 @@ jobs:
           go-version: ${{ steps.meta.outputs.go }}
       - name: Build and verify
         if: ${{ !inputs.publish }}
-        run: scripts/build-fips-release.sh "${{ steps.meta.outputs.tag }}"
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: scripts/build-fips-release.sh "${TAG}"
       - name: Build, verify and publish
         if: ${{ inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/build-fips-release.sh --publish "${{ steps.meta.outputs.tag }}"
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: scripts/build-fips-release.sh --publish "${TAG}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node_exporter-fips

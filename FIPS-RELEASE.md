@@ -8,7 +8,7 @@ Each release is an **unmodified upstream release tag** built with `GOFIPS140`
 set. Only `VERSION` gets a `-fips` suffix, so the binary, the tarball names and
 the release tag all read `1.12.1-fips` for upstream `v1.12.1`. Nothing else in
 this fork diverges from upstream apart from `scripts/`, the `FIPS release`
-workflow, this file and a `.gitignore` line.
+workflow, this file, a `.gitignore` line and the root `Dockerfile` (below).
 
 Artifacts per release, linux amd64 and arm64:
 
@@ -79,13 +79,55 @@ PLATFORMS="linux/amd64" scripts/build-fips-release.sh v1.13.0
 
 See https://go.dev/doc/security/fips140 for the full list.
 
+## Container image
+
+The root `Dockerfile` is upstream's with YugabyteDB's changes. It builds the
+image the YugabyteDB Helm chart runs as its node_exporter sidecar: this fork's
+FIPS binary on a UBI9 base instead of busybox, squashed to one layer, run as
+user 10001, with the base's `rf-*` package repo files removed. The build fails
+unless the binary reports the `fips140v1.0` build tag. Upstream's
+`Dockerfile.distroless` is left as is.
+
+As upstream, the binary comes from the build context at
+`.build/<os>-<arch>/node_exporter`. Stage the FIPS one there first, from a
+release tarball, or from the tarball `scripts/build-fips-release.sh` leaves in
+`.fips-build/dist`:
+
+```sh
+mkdir -p .build/linux-amd64
+curl -fsSL https://github.com/yugabyte/node_exporter/releases/download/v1.12.1-fips/node_exporter-1.12.1-fips.linux-amd64.tar.gz |
+  tar -xz -C .build/linux-amd64 --strip-components=1 node_exporter-1.12.1-fips.linux-amd64/node_exporter
+docker build -t node-exporter-fips:local .
+docker run --rm node-exporter-fips:local --version   # version 1.12.1-fips, tags fips140v1.0
+```
+
+Build on the architecture of the staged binary (amd64 or arm64), since the
+FIPS check runs it. Build arguments, each with a public default:
+
+| Argument | Default |
+| --- | --- |
+| `BASE_IMAGE` | `registry.access.redhat.com/ubi9/ubi-minimal:latest` |
+| `ARCH`, `OS` | `amd64`, `linux`, as upstream |
+| `USER` | `10001` |
+
+The `org.opencontainers.image.base.name` label records the `BASE_IMAGE` an
+image was built from.
+
+`make docker` at the root now builds this image rather than upstream's, so
+upstream's `CI` workflow, which runs it on every pull request for six
+architectures, cannot pass here.
+
 ## Keeping the fork current
 
-`master` tracks upstream `master` plus the fork-only files above. To refresh
-it: `git fetch https://github.com/prometheus/node_exporter.git master && git merge FETCH_HEAD`.
-Releases never depend on `master`'s content beyond the workflow file, since the
-workflow builds the upstream tag it is given.
+`yb-master` is the default branch: upstream `master` plus the fork-only files
+above. `master` is left as it was. To refresh `yb-master`, merge rather than
+rebase, so nothing is force-pushed:
+`git fetch https://github.com/prometheus/node_exporter.git master && git merge FETCH_HEAD`.
+On a conflict in `Dockerfile`, keep this fork's version. Releases never depend
+on the branch's content beyond the workflow file, since the workflow builds the
+upstream tag it is given.
 
-Pushes to the fork also trigger upstream's own `CI` and `bsd` workflows, whose
-publish jobs fail without upstream's secrets. Cancel them or disable those
-workflows in the repository's Actions settings.
+Upstream's `CI` (`ci.yml`) and `bsd` (`bsd.yml`) workflows are disabled in this
+repository's Actions settings: their publish jobs need upstream's secrets, and
+`CI` builds the root `Dockerfile` for architectures it doesn't support. Keep
+`FIPS release` enabled.
